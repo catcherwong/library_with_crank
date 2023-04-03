@@ -1,0 +1,35 @@
+components:
+    lib: 
+        script: |
+            echo lib
+        arguments:
+            # crank arguments
+            "--application.selfContained false"
+
+# default arguments that are always used on crank commands
+defaults: ""
+
+# the first value is the default if none is specified
+profiles:
+    local:
+      description: Local
+      arguments: --profile local
+    remote-win:
+      description: windows
+      arguments: --profile remote-win 
+    remote-lin:
+      description: linux
+      arguments: --profile remote-lin 
+
+benchmarks:
+    lib-dosomething:
+      description: DoSomething
+      arguments: --config ./benchmark/library.benchmark.yml --scenario dosomething
+
+    lib-getsomething:
+      description: GetSomething
+      arguments: --config ./benchmark/library.benchmark.yml --scenario getsomething
+
+    lib-another:
+      description: Another
+      arguments: --config ./benchmark/library.benchmark.yml --scenario another

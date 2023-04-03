@@ -1,0 +1,49 @@
+jobs:
+  lib:
+    source:
+      localFolder: ../src
+      project: BenchmarkLibrary/BenchmarkLibrary.csproj
+    variables:
+      filter: "*"
+      jobArg: short
+    arguments: --job {{jobArg}} --filter {{filter}} --memory
+    options:
+      benchmarkDotNet: true  
+
+scenarios:
+  dosomething:
+    application:
+      job: lib
+      variables:
+        filter: "*DoSomething*"
+
+  getsomething:
+    application:     
+      job: lib
+      variables:
+        filter: "*GetSomething*"
+
+  another:
+    application:     
+      job: lib
+      variables:
+        filter: "*Method*"
+
+profiles:
+  local:
+    jobs: 
+      application:
+        endpoints: 
+          - http://localhost:9999
+  
+  remote-lin:
+    jobs: 
+      application:
+        endpoints: 
+          - http://remote-lin.com
+
+  remote-win:
+    jobs: 
+      application:
+        endpoints: 
+          - http://remote-win.com

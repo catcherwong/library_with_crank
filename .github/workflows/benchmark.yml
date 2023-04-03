@@ -1,0 +1,193 @@
+name: benchmark
+
+env:
+  CRANK_VERSION: '0.2.0-*'
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION: 1
+
+on:
+  issue_comment:
+    types: [ created ]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  benchmark:
+    name: benchmark
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork == false && github.event.issue.pull_request != '' && contains(github.event.comment.body, '/benchmark') }}
+
+    steps:
+
+    - name: Get pull request commit
+      uses: actions/github-script@v6
+      id: get-pr
+      with:
+        result-encoding: string
+        script: |
+          const result = await github.rest.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+          return result.data.head.sha;
+
+    - name: Extract benchmark argument
+      uses: actions/github-script@v6
+      id: benchmark-argument
+      with:
+        result-encoding: string
+        script: |
+          // Documents all available commands
+          const availableBenchmarks = {
+            "lib-dosomething": "Runs the lib utils dosomething benchmark",
+            "lib-getsomething": "Runs the lib utils getsomething benchmark",
+            "lib-another": "Runs the lib another benchmark",
+            "web-root": "Runs the web benchmark"
+          };
+
+          // Verify the user is a collaborator
+          const repoOwner = context.payload.repository.owner.login;
+          const repoName = context.payload.repository.name;
+          const commentUser = context.payload.comment.user.login;
+
+          try {
+            var membership = await github.rest.repos.checkCollaborator({
+              owner: repoOwner,
+              repo: repoName,
+              username: commentUser
+            });
+          } catch (error) {
+            var message = `Error: @${commentUser} is not a repo collaborator, benchmarking is not allowed.`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
+            throw message;
+          }
+
+          core.info(`Verified ${commentUser} is a repo collaborator.`);
+
+          if (context.eventName !== "issue_comment") {
+            throw "Error: This action only works on issue_comment events.";
+          }
+
+          // /benchmark benchmarks profiles components
+          const regex = /\/benchmark ([a-zA-Z\d\/\.\-\_\,]+) ([a-zA-Z\d\/\.\-\_\,]+) ([a-zA-Z\d\/\.\-\_\,]+)/;
+          const arguments = regex.exec(context.payload.comment.body);
+
+          // Generate help text with all available commands
+          if (arguments == null || arguments.length < 4) {
+              var body = 'The `/benchmark` command accepts these benchmarks:\n';
+              
+              for (var key in availableBenchmarks) {
+                body += `- \`/benchmark ${key}\`: ${availableBenchmarks[key]}\n`;
+              }
+
+              body += "\nFor more information, following this link [pr-benchmark](https://github.com/catcherwong/crank_sample/blob/main/benchmark/pr-benchmark.yml)\n"
+
+              body += "Examples:\n"
+              body += `- \`/benchmark benchmarks profiles components\`\n`
+              body += `- \`/benchmark lib-dosomething local lib\`\n`
+              body += `- \`/benchmark lib-dosomething,lib-getsomething local lib\`\n`
+
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+
+              throw "Error: Invalid arguments, workflow stopped.";             
+          }
+
+          const benchmark = arguments[1] + "|" + arguments[2] + "|" +arguments[3];
+          const workflowUrl = `${{ github.server_url }}/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+          core.info(`Benchmark: ${benchmark}`);
+
+          return benchmark;
+
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v3
+
+    - name: Install crank
+      run: |
+        dotnet tool install --global Microsoft.Crank.Agent --version "${{ env.CRANK_VERSION }}"
+        dotnet tool install --global Microsoft.Crank.Controller --version "${{ env.CRANK_VERSION }}"
+        dotnet tool install --global Microsoft.Crank.PullRequestBot --version "${{ env.CRANK_VERSION }}"
+
+    - name: Benchmark
+      run: |
+
+        echo "${{ steps.benchmark-argument.outputs.result }}" > args.txt
+
+        benchmarks=`cat args.txt | awk -F '|' '{print $1}'`
+        profiles=`cat args.txt | awk -F '|' '{print $2}'`
+        components=`cat args.txt | awk -F '|' '{print $3}'`
+
+        echo $benchmarks
+        echo $profiles
+        echo $components
+        
+        nohup crank-agent --url http://localhost:9999 > /tmp/run_agent.log 2>&1 &
+
+        sleep 5
+
+        curl http://localhost:9999/info
+
+        crank-pr \
+          --benchmarks "$benchmarks" \
+          --components "$components" \
+          --config ${{ github.workspace }}/benchmark/pr-benchmark.yml\
+          --profiles "$profiles" \
+          --pull-request "${{ github.event.issue.number }}" \
+          --repository "${{ github.server_url }}/${{ github.repository }}" \
+          --access-token "${{ secrets.GITHUB_TOKEN }}" \
+          --publish-results true
+
+    - name: Report failure
+      uses: actions/github-script@v6
+      if: ${{ failure() }}
+      with:
+        script: |
+          const benchmark = '${{ steps.benchmark-argument.outputs.result }}';
+          const workflowUrl = `${{ github.server_url }}/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+          const failure_body = `Benchmark [${benchmark}](${workflowUrl}) failed. :x:`;
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: failure_body
+          });
+
+          await github.rest.repos.createCommitStatus({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            sha: '${{ steps.get-pr.outputs.result }}',
+            state: 'failure',
+            target_url: workflowUrl,
+            description: `Benchmark ${benchmark} failed.`,
+            context: `benchmarks / ${benchmark.toLowerCase()}`
+          });
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: logs
+        path: |
+          /tmp/configuration.debug.json
+          /tmp/run_agent.log
