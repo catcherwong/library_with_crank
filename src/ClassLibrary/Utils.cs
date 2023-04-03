@@ -5,7 +5,7 @@
         public static string DoSomething(string str, int len)
         {
             // For showing benchmark and pull request
-            var b = new byte[20];
+            var b = new byte[10];
 
             if (str.Length > len)
             {
